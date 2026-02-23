@@ -1,0 +1,53 @@
+# Jaeger config with Badger storage, 7-day retention.
+# Used when running: jaeger --config=/etc/jaeger/jaeger-config.yaml
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: jaeger
+    metrics:
+      level: info
+    logs:
+      level: info
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http: {}
+
+  jaeger_query:
+    storage:
+      traces: jaeger_store
+    ui: {}
+
+  jaeger_storage:
+    backends:
+      jaeger_store:
+        badger:
+          directories:
+            keys: /var/jaeger/badger/keys
+            values: /var/jaeger/badger/values
+          ephemeral: false
+          ttl:
+            spans: 168h  # 7 days
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: jaeger_store
