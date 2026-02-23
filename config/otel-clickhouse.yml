@@ -1,0 +1,28 @@
+# OTEL collector config for ClickHouse trace backend.
+# Note: ClickHouse trace storage typically uses otelcol-contrib with the ClickHouse exporter.
+# This config uses the standard collector; for production ClickHouse integration,
+# use otel/opentelemetry-collector-contrib with the clickhouse exporter.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: debug
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
