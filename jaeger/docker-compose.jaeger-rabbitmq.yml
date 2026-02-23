@@ -1,0 +1,157 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arcane-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-arcanedb}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - arcane
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d arcanedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq-init:
+    image: busybox:latest
+    user: root
+    entrypoint: ["sh", "-c", "chown -R 999:999 /var/lib/rabbitmq"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - arcane
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: arcane-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - arcane
+    depends_on:
+      - rabbitmq-init
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/jaeger:2.14.0
+    container_name: jaeger
+    command:
+      - --set=receivers.otlp.protocols.grpc.endpoint="0.0.0.0:4317"
+      - --set=receivers.otlp.protocols.http.endpoint="0.0.0.0:4318"
+    ports:
+      - "16686:16686"
+      - "4317"
+      - "4318"
+    networks:
+      - arcane
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.86.0
+    container_name: arcane-otel-collector
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ../config/otel-jaeger.yml:/etc/otel-collector.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - arcane
+    depends_on:
+      - jaeger
+
+  frontend:
+    image: arcanetracing/arcane-ui:latest
+    container_name: arcane-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      BACKEND_URL: http://backend:8085
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - arcane
+
+  backend:
+    image: arcanetracing/arcane:latest
+    container_name: arcane-backend
+    ports:
+      - "8085:8085"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "-O", "/dev/null", "http://localhost:8085/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 90s
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://user:password@postgres:5432/arcanedb}
+      DATABASE_SSL: ${DATABASE_SSL:-false}
+      WORKER_API: http://worker:8000/api/v1/run
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-no-reply@example.com}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8085}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-jwt-secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev-encryption-key-64-chars-minimum-required-for-production-safe}
+      API_KEY_SALT: ${API_KEY_SALT:-dev-api-key-salt}
+      MESSAGE_BROKER: rabbitmq
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      ARCANE_ENTERPRISE_LICENSE: ${ARCANE_ENTERPRISE_LICENSE:-}
+      EVALUATION_JOBS_TOPIC: ${EVALUATION_JOBS_TOPIC:-evaluation-requests}
+      EVALUATION_RESULTS_TOPIC: ${EVALUATION_RESULTS_TOPIC:-evaluation-results}
+      EXPERIMENT_JOBS_TOPIC: ${EXPERIMENT_JOBS_TOPIC:-experiment-requests}
+      EXPERIMENT_RESULTS_TOPIC: ${EXPERIMENT_RESULTS_TOPIC:-experiment-results}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - arcane
+
+  worker:
+    image: arcanetracing/arcane-worker:latest
+    container_name: arcane-worker
+    environment:
+      MESSAGE_BROKER: rabbitmq
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      API_BASE_URL: http://backend:8085
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-jwt-secret}
+      EVALUATION_JOBS_TOPIC: ${EVALUATION_JOBS_TOPIC:-evaluation-requests}
+      EVALUATION_RESULTS_TOPIC: ${EVALUATION_RESULTS_TOPIC:-evaluation-results}
+      EXPERIMENT_JOBS_TOPIC: ${EXPERIMENT_JOBS_TOPIC:-experiment-requests}
+      EXPERIMENT_RESULTS_TOPIC: ${EXPERIMENT_RESULTS_TOPIC:-experiment-results}
+    depends_on:
+      - backend
+      - rabbitmq
+    networks:
+      - arcane
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+
+networks:
+  arcane:
+    driver: bridge
